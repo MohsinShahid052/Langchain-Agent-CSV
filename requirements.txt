@@ -1,0 +1,11 @@
+langchain
+langchain-experimental
+langchain-community
+openai
+pyyaml
+pandas
+matplotlib
+tabulate
+openpyxl
+seaborn
+langchain_openai
