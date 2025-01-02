@@ -1,41 +1,26 @@
 
+
 import streamlit as st
 import pandas as pd
-import numpy as np
 import os
 from langchain_experimental.agents.agent_toolkits import create_csv_agent
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 
-
 def create_csv_qa_agent(csv_file, api_key, model='gpt-4o-mini'):
-    """
-    Create a CSV Question Answering Agent
-    
-    Args:
-        csv_file (str): Path to the CSV file
-        api_key (str): OpenAI API key
-        model (str): OpenAI model to use
-    
-    Returns:
-        CSV Agent capable of answering questions
-    """
     try:
-        # Initialize the OpenAI model
         llm = ChatOpenAI(
             openai_api_key=api_key, 
             model=model,
             temperature=0.0
         )
         
-        # Create CSV agent with Zero Shot React Description
         agent = create_csv_agent(
             llm,
             csv_file,
             verbose=True,
             agent_type='openai-functions',
-            allow_dangerous_code=True  # Add this parameter
-
+            allow_dangerous_code=True
         )
         
         return agent
@@ -44,107 +29,67 @@ def create_csv_qa_agent(csv_file, api_key, model='gpt-4o-mini'):
         st.error(f"Error creating agent: {str(e)}")
         return None
 
-
-def analyze_csv_metadata(df):
-    """
-    Analyze CSV file for scope, risk, and estimation metrics
-    """
-    analysis = {
-        "scope": {
-            "total_rows": len(df),
-            "total_columns": len(df.columns),
-            "memory_usage": df.memory_usage(deep=True).sum() / 1024 / 1024,  # in MB
-            "data_types": df.dtypes.value_counts().to_dict()
-        },
-        "risk": {
-            "missing_values": df.isnull().sum().to_dict(),
-            "missing_percentage": (df.isnull().sum() / len(df) * 100).to_dict(),
-            "duplicate_rows": df.duplicated().sum(),
-            "unusual_values": {}
-        },
-        "estimation": {
-            "processing_time_estimate": len(df) * len(df.columns) / 1000,  # rough estimate in seconds
-            "complexity_score": 0
-        }
-    }
+def get_conversation_context(question_history):
+    if not question_history:
+        return ""
     
-    # Analyze numerical columns for outliers and unusual values
-    for column in df.select_dtypes(include=[np.number]).columns:
-        Q1 = df[column].quantile(0.25)
-        Q3 = df[column].quantile(0.75)
-        IQR = Q3 - Q1
-        outliers = df[(df[column] < (Q1 - 1.5 * IQR)) | (df[column] > (Q3 + 1.5 * IQR))][column].count()
-        analysis["risk"]["unusual_values"][column] = outliers
-
-    # Calculate complexity score based on data characteristics
-    analysis["estimation"]["complexity_score"] = (
-        (analysis["scope"]["total_columns"] * 0.3) +
-        (sum(analysis["risk"]["missing_values"].values()) / len(df) * 0.4) +
-        (analysis["risk"]["duplicate_rows"] / len(df) * 0.3)
-    )
-
-    return analysis
-
-
-def display_selected_analysis(analysis, selected_type):
-    """Display specific analysis based on button selection"""
-    if selected_type == "Scope":
-        st.subheader("📊 Scope Analysis")
-        # Use a container instead of columns
-        st.metric("Total Rows", analysis["scope"]["total_rows"])
-        st.metric("Total Columns", analysis["scope"]["total_columns"])
-        st.metric("Memory Usage (MB)", f"{analysis['scope']['memory_usage']:.2f}")
-        
-        st.write("Data Types Distribution:")
-        for dtype, count in analysis["scope"]["data_types"].items():
-            st.write(f"- {dtype}: {count} columns")
-
-    elif selected_type == "Risk":
-        st.subheader("⚠️ Risk Analysis")
-        st.write("Missing Values Analysis:")
-        missing_df = pd.DataFrame({
-            'Column': list(analysis["risk"]["missing_values"].keys()),
-            'Missing Count': list(analysis["risk"]["missing_values"].values()),
-            'Missing Percentage': [f"{x:.2f}%" for x in analysis["risk"]["missing_percentage"].values()]
-        })
-        st.dataframe(missing_df)
-        st.metric("Duplicate Rows", analysis["risk"]["duplicate_rows"])
-        
-        if analysis["risk"]["unusual_values"]:
-            st.write("Outliers in Numerical Columns:")
-            for col, count in analysis["risk"]["unusual_values"].items():
-                st.write(f"- {col}: {count} outliers")
-
-    elif selected_type == "Estimation":
-        st.subheader("⏱️ Estimation")
-        st.metric("Estimated Processing Time (seconds)", 
-                 f"{analysis['estimation']['processing_time_estimate']:.2f}")
-        st.metric("Complexity Score (0-1)", 
-                 f"{analysis['estimation']['complexity_score']:.2f}")
+    context = "Previous conversation:\n"
+    for i, (q, a) in enumerate(question_history, 1):
+        context += f"Q{i}: {q}\nA{i}: {a}\n"
+    context += "\nBased on this context, please answer: "
+    return context
 
 def main():
-    st.set_page_config(layout="wide")  # Use wide layout
-    st.title("📊 CSV Analysis Assistant")
+    st.set_page_config(layout="wide")
     
-    # Sidebar for API configuration
-    st.sidebar.header("🔑 OpenAI API Configuration")
-    openai_api_key = st.sidebar.text_input(
-        "Enter OpenAI API Key", 
-        type="password",
-        help="You can get your API key from https://platform.openai.com/account/api-keys",
-        value=os.getenv("OPENAI_API_KEY", "")
-    )
+    # Add custom CSS for better formatting
+    st.markdown("""
+        <style>
+        .main > div {
+            max-width: 1000px;
+            margin: auto;
+            padding: 0 1rem;
+        }
+        .stTextArea > div > div > textarea {
+            min-height: 100px;
+            font-size: 16px;
+            line-height: 1.5;
+        }
+        </style>
+    """, unsafe_allow_html=True)
     
-    model = st.sidebar.selectbox(
-        "Select OpenAI Model",
-        options=['gpt-4o-mini'],
-        index=0
-    )
+    # Center-aligned title
+    st.markdown("<h1 style='text-align: center;'>📊 CSV Analysis Assistant</h1>", unsafe_allow_html=True)
     
-    # Main content area split into two columns
-    left_col, right_col = st.columns([1, 1])
+    # Initialize session states
+    if 'question_history' not in st.session_state:
+        st.session_state.question_history = []
+    if 'clear_input' not in st.session_state:
+        st.session_state.clear_input = False
     
-    with left_col:
+    # Sidebar configuration
+    with st.sidebar:
+        st.header("🔑 OpenAI API Configuration")
+        openai_api_key = st.text_input(
+            "Enter OpenAI API Key", 
+            type="password",
+            help="Get your API key from https://platform.openai.com/account/api-keys",
+            value=os.getenv("OPENAI_API_KEY", "")
+        )
+        
+        model = st.selectbox(
+            "Select OpenAI Model",
+            options=['gpt-4o-mini'],
+            index=0
+        )
+        
+        if st.button("Clear Conversation History"):
+            st.session_state.question_history = []
+            st.success("Conversation history cleared!")
+
+    # Main content
+    col1, col2, col3 = st.columns([1, 6, 1])
+    with col2:
         uploaded_file = st.file_uploader(
             "Upload CSV File",
             type=['csv'],
@@ -157,16 +102,22 @@ def main():
             with open(csv_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
             
-            # Read CSV and show preview
             df = pd.read_csv(csv_path)
             st.subheader("📝 File Preview")
             st.dataframe(df.head())
             
-            # Question Answering Section
+            # Question input using text_area
             st.subheader("🤔 Ask Questions About Your Data")
-            question = st.text_input("Enter your question:")
             
-            if st.button("Get Answer"):
+            # Reset text_area if clear_input is True
+            if st.session_state.clear_input:
+                question = st.text_area("Enter your question:", value="", height=100, key=f"question_input_{len(st.session_state.question_history)}")
+                st.session_state.clear_input = False
+            else:
+                question = st.text_area("Enter your question:", height=100, key=f"question_input_{len(st.session_state.question_history)}")
+            
+            # Get Answer button
+            if st.button("Get Answer", use_container_width=True):
                 if not openai_api_key:
                     st.warning("Please enter your OpenAI API key!")
                 elif not question:
@@ -174,42 +125,26 @@ def main():
                 else:
                     with st.spinner("Processing your question..."):
                         try:
-                            agent = create_csv_qa_agent(
-                                csv_file=csv_path,
-                                api_key=openai_api_key,
-                                model=model
-                            )
-                            
+                            agent = create_csv_qa_agent(csv_path, openai_api_key, model)
                             if agent:
-                                answer = agent.run(question)
-                                st.success("🎉 Answer:")
-                                st.write(answer)
-                        
+                                context = get_conversation_context(st.session_state.question_history)
+                                full_question = context + question
+                                answer = agent.run(full_question)
+                                st.session_state.question_history.append((question, answer))
+                                st.session_state.clear_input = True
+                                st.rerun()
                         except Exception as e:
                             st.error(f"Error processing question: {str(e)}")
-    
-    with right_col:
-        if uploaded_file is not None:
-            # Analysis type selection buttons in a horizontal layout
-            st.subheader("Select Analysis Type")
-            button_cols = st.columns(3)
             
-            analysis = analyze_csv_metadata(df)
-            
-            # Store the button states
-            if 'selected_analysis' not in st.session_state:
-                st.session_state.selected_analysis = None
-            
-            if button_cols[0].button("Scope", use_container_width=True):
-                st.session_state.selected_analysis = "Scope"
-            if button_cols[1].button("Risk", use_container_width=True):
-                st.session_state.selected_analysis = "Risk"
-            if button_cols[2].button("Estimation", use_container_width=True):
-                st.session_state.selected_analysis = "Estimation"
-            
-            # Display the selected analysis
-            if st.session_state.selected_analysis:
-                display_selected_analysis(analysis, st.session_state.selected_analysis)
+            # Display conversation history
+            if st.session_state.question_history:
+                st.subheader("💭 Conversation History")
+                for i, (q, a) in enumerate(reversed(st.session_state.question_history), 1):
+                    st.text(f"Question {i}:")
+                    st.text_area("", value=q, height=100, disabled=True, key=f"q_{i}")
+                    st.text("Answer:")
+                    st.text_area("", value=a, height=150, disabled=True, key=f"a_{i}")
+                    st.divider()
 
 if __name__ == "__main__":
     main()
