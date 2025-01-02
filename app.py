@@ -1,5 +1,3 @@
-
-
 import streamlit as st
 import pandas as pd
 import os
@@ -20,6 +18,7 @@ def create_csv_qa_agent(csv_file, api_key, model='gpt-4o-mini'):
             csv_file,
             verbose=True,
             agent_type='openai-functions',
+            prefix="You are an expert data analyst. Before answering any question, carefully analyze the CSV data to provide accurate and insightful answers. Focus on giving precise information from the data.",
             allow_dangerous_code=True
         )
         
@@ -36,13 +35,13 @@ def get_conversation_context(question_history):
     context = "Previous conversation:\n"
     for i, (q, a) in enumerate(question_history, 1):
         context += f"Q{i}: {q}\nA{i}: {a}\n"
-    context += "\nBased on this context, please answer: "
+    context += "\nConsider the above context and CSV data to answer: "
     return context
 
 def main():
     st.set_page_config(layout="wide")
     
-    # Add custom CSS for better formatting
+    # Add custom CSS for better formatting and white text in conversation history
     st.markdown("""
         <style>
         .main > div {
@@ -55,6 +54,10 @@ def main():
             font-size: 16px;
             line-height: 1.5;
         }
+        /* White text for conversation history */
+        .conversation-text textarea {
+            color: white !important;
+        }
         </style>
     """, unsafe_allow_html=True)
     
@@ -66,6 +69,8 @@ def main():
         st.session_state.question_history = []
     if 'clear_input' not in st.session_state:
         st.session_state.clear_input = False
+    if 'df' not in st.session_state:
+        st.session_state.df = None
     
     # Sidebar configuration
     with st.sidebar:
@@ -102,14 +107,17 @@ def main():
             with open(csv_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
             
-            df = pd.read_csv(csv_path)
-            st.subheader("📝 File Preview")
-            st.dataframe(df.head())
+            # Load and cache DataFrame
+            if st.session_state.df is None:
+                st.session_state.df = pd.read_csv(csv_path)
             
+            st.subheader("📝 File Preview")
+            st.dataframe(st.session_state.df.head())
+            
+          
             # Question input using text_area
             st.subheader("🤔 Ask Questions About Your Data")
             
-            # Reset text_area if clear_input is True
             if st.session_state.clear_input:
                 question = st.text_area("Enter your question:", value="", height=100, key=f"question_input_{len(st.session_state.question_history)}")
                 st.session_state.clear_input = False
@@ -123,7 +131,7 @@ def main():
                 elif not question:
                     st.warning("Please enter a question!")
                 else:
-                    with st.spinner("Processing your question..."):
+                    with st.spinner("Analyzing data and processing your question..."):
                         try:
                             agent = create_csv_qa_agent(csv_path, openai_api_key, model)
                             if agent:
@@ -136,14 +144,16 @@ def main():
                         except Exception as e:
                             st.error(f"Error processing question: {str(e)}")
             
-            # Display conversation history
+            # Display conversation history with white text
             if st.session_state.question_history:
                 st.subheader("💭 Conversation History")
                 for i, (q, a) in enumerate(reversed(st.session_state.question_history), 1):
-                    st.text(f"Question {i}:")
+                    st.markdown(f"**Question {i}:**")
+                    st.markdown('<div class="conversation-text">', unsafe_allow_html=True)
                     st.text_area("", value=q, height=100, disabled=True, key=f"q_{i}")
-                    st.text("Answer:")
+                    st.markdown("**Answer:**")
                     st.text_area("", value=a, height=150, disabled=True, key=f"a_{i}")
+                    st.markdown('</div>', unsafe_allow_html=True)
                     st.divider()
 
 if __name__ == "__main__":
